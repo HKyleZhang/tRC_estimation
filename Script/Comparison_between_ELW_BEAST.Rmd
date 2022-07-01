@@ -1,0 +1,288 @@
+---
+title: "ELW, BEAST comparison"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r lib}
+suppressMessages(library(tidyverse))
+suppressMessages(library(ggpubr))
+suppressMessages(library(ggbreak))
+```
+
+```{r read-in shared files}
+# Physical position
+pos <- read_csv("./Input_local/LinkageMap_translated_positions_curated_genes.csv", 
+                col_types = cols(
+                  `Transcript ID` = col_character(),
+                  `Gene name` = col_character(),
+                  Chromosome = col_character(),
+                  Start = col_double(),
+                  End = col_double(),
+                  GRW_transcript_ID = col_character()))  %>% 
+  select(`Transcript ID`, Start) %>% 
+  `colnames<-`(.,c("Transcript_ID","st_Pos"))
+
+# Alignment length
+len <- read.table("./Input_local/goalign_alignment_length.txt") %>% 
+  `colnames<-`(.,c("Transcript_ID","Length"))
+```
+
+#### ELW
+```{r ELW}
+# ELW result
+grw <- read.table("./Analysis_local/IQ-Tree_topology_test/IQ-Tree_topology_test_All_Z+GRW_W.txt", header = T) %>% mutate(Species = "GRW")
+
+# ----------
+ELW <- grw %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  select(Transcript_ID, Tree, c.ELW) %>%
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+  `colnames<-`(.,c("Transcript_ID", "Tree", "ELW")) %>% 
+  mutate(lower = NaN, upper = NaN)
+
+# ----- 95% confidence set -----
+sig_sign <- function(tb) {
+  dd <- tb %>% arrange(ELW) %>% mutate(signs = "+")
+  for (i in 1:nrow(dd)) {
+    if (sum(dd$ELW[1:i]) <= 0.05) {
+      dd$signs[1:i] <- "-"
+    }
+  }
+  return(dd)
+}
+
+# ----- 95% confidence set -----
+ELW <- ELW %>% nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, sig_sign)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output")
+
+# ------------------------------
+d_time <- c(0, 
+            0.00366300, 0.01831502, 
+            0.02564103, 0.06227106, 
+            0.07692308, 0.08791209, 
+            0.09523810, 0.15018315,
+            0.21978022, 0.27472527,
+            0.34065934, 1)
+
+for (i in 1:12) {
+  ELW$lower[ELW$Tree == i] <- d_time[i]
+  ELW$upper[ELW$Tree == i] <- d_time[i + 1]
+}
+
+get_intervals <- function(tb) {
+  tb_1 <- tb %>% filter(signs == "+") %>% arrange(desc(ELW))
+  max_mean <- tb_1$interval_mean[1]
+  max_lower <- tb_1$lower[1]
+  max_upper <- tb_1$upper[1]
+  
+  range_lower <- min(tb_1$lower)
+  range_upper <- max(tb_1$upper)
+  
+  tb_out <- tibble(mean = max_mean, 
+               max_lower = max_lower, 
+               max_upper = max_upper, 
+               range_lower = range_lower, 
+               range_upper = range_upper)
+  return(tb_out)
+}
+
+get_range <- function(tb) {
+  tb_1 <- tb %>% filter(signs == "+") %>% arrange(desc(ELW))
+  max_mean <- tb_1$Tree[1]
+  
+  range_lower <- min(tb_1$Tree)
+  range_upper <- max(tb_1$Tree)
+  
+  tb_out <- tibble(mean = max_mean, 
+               range_lower = range_lower, 
+               range_upper = range_upper)
+  return(tb_out)
+}
+
+
+# ------------------------------
+ELW_1 <- ELW %>% mutate(interval_mean = (lower + upper) / 2) %>% 
+  nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, get_intervals)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output")
+ELW_1 <- left_join(ELW_1, pos, by = "Transcript_ID") %>% arrange(st_Pos) %>% mutate(group = "NA")
+ELW_1$Transcript_ID <- factor(ELW_1$Transcript_ID, levels = unique(ELW_1$Transcript_ID))
+ELW_1$group[ELW_1$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ELW_1$group[ELW_1$st_Pos >= 76.8*1e6] <- "Added Z"
+ELW_1$group <- factor(ELW_1$group, levels = c("Ancestral Z", "Added Z"))
+
+# ------------------------------
+ELW_2 <- ELW %>%
+  nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, get_range)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output")
+ELW_2 <- left_join(ELW_2, pos, by = "Transcript_ID") %>% arrange(st_Pos) %>% mutate(group = "NA")
+ELW_2$Transcript_ID <- factor(ELW_2$Transcript_ID, levels = unique(ELW_2$Transcript_ID))
+ELW_2$group[ELW_2$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ELW_2$group[ELW_2$st_Pos >= 76.8*1e6] <- "Added Z"
+ELW_2$group <- factor(ELW_2$group, levels = c("Ancestral Z", "Added Z"))
+```
+
+#### BEAST
+```{r BEAST}
+# BEAST result
+BEAST <- read_csv("./Analysis_local/Species_combinations_BEAST/BEAST_log_summary/BEAST_log_summary_11sp.csv", 
+                  col_types = cols(
+  model = col_character(),
+  dataset = col_character(),
+  clock_model = col_character(),
+  Transcript_ID = col_character(),
+  mean = col_double(),
+  stderr_mean = col_double(),
+  stdev = col_double(),
+  variance = col_double(),
+  median = col_double(),
+  hpd_interval_low = col_double(),
+  hpd_interval_high = col_double(),
+  act = col_double(),
+  ess = col_double()
+)) %>%
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>%
+  select(Transcript_ID, median, hpd_interval_low, hpd_interval_high, st_Pos) %>% 
+  mutate(group = "NA") %>% 
+  arrange(st_Pos)
+
+BEAST$Transcript_ID <- factor(BEAST$Transcript_ID, levels = unique(BEAST$Transcript_ID))
+BEAST$group[BEAST$st_Pos < 76.8*1e6] <- "Ancestral Z"
+BEAST$group[BEAST$st_Pos >= 76.8*1e6] <- "Added Z"
+BEAST$group <- factor(BEAST$group, levels = c("Ancestral Z", "Added Z"))
+```
+
+
+```{r}
+ELW_mod <- ELW_1 %>% select(-st_Pos) %>% 
+  `colnames<-`(.,c("Transcript_ID", "ELW_mean", "ELW_mean_lower", "ELW_mean_upper", "ELW_lower", "ELW_upper", "group"))
+BEAST_mod <- BEAST %>% select(Transcript_ID, median, hpd_interval_low, hpd_interval_high) %>% 
+  `colnames<-`(.,c("Transcript_ID", "BEAST_median", "BEAST_lower", "BEAST_upper"))
+
+all_1 <- left_join(ELW_mod, BEAST_mod, by = "Transcript_ID") %>% select(Transcript_ID, group, everything())
+ELW_mean_jitter_1 <- jitter(all_1$ELW_mean, amount = 0)
+BEAST_median_jitter_1 <- jitter(all_1$BEAST_median, amount = 0)
+
+ELW_mean_diff_1 <- (ELW_mean_jitter_1 - all_1$ELW_mean) / 3
+BEAST_median_diff_1 <- (BEAST_median_jitter_1 - all_1$BEAST_median) / 2
+
+all_1$ELW_mean <- all_1$ELW_mean + ELW_mean_diff_1
+all_1$ELW_mean_lower <- all_1$ELW_mean_lower + ELW_mean_diff_1
+all_1$ELW_mean_upper <- all_1$ELW_mean_upper + ELW_mean_diff_1
+all_1$ELW_lower <- all_1$ELW_lower + ELW_mean_diff_1
+all_1$ELW_upper <- all_1$ELW_upper + ELW_mean_diff_1
+
+all_1$BEAST_median <- all_1$BEAST_median + BEAST_median_diff_1
+all_1$BEAST_lower <- all_1$BEAST_lower + BEAST_median_diff_1
+all_1$BEAST_upper <- all_1$BEAST_upper + BEAST_median_diff_1
+
+mean_ELW_mean_diff_1 <- mean(ELW_mean_diff_1)
+mean_BEAST_median_diff_1 <- mean(BEAST_median_diff_1)
+
+p1 <- ggplot(data = all_1) +
+  geom_point(aes(x = BEAST_median, y = ELW_mean), size = 0.1) +
+  geom_errorbar(aes(x = BEAST_median, ymin = ELW_lower, ymax = ELW_upper, color = group), size = 0.2, width = 0) + 
+  geom_errorbarh(data = all_1, aes(y = ELW_mean, xmin = BEAST_lower, xmax = BEAST_upper, color = group), size = 0.2, height = 0) + 
+  geom_errorbar(aes(x = BEAST_median, ymin = ELW_mean_lower, ymax = ELW_mean_upper, color = group), size = 1, width = 0) +
+  labs(x = "BEAST timing estimates", y = "ELW timing estimates", color = "Genes' location") +
+  scale_color_manual(values = c("turquoise3", "violetred3")) +
+  scale_x_continuous(breaks = seq(0,1,0.1), limits = c(0,1.1)) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0, 1.2)) +
+  geom_hline(yintercept = 0.34065934 + mean_ELW_mean_diff_1, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_hline(yintercept = 0.08791209 + mean_ELW_mean_diff_1, linetype = "dashed", color = "red2", size = 0.3) + 
+  geom_vline(xintercept = 0.34065934 + mean_BEAST_median_diff_1, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_vline(xintercept = 0.08791209 + mean_BEAST_median_diff_1, linetype = "dashed", color = "red2", size = 0.3) + 
+  geom_text(aes(x = 0.615, y = 0.08791209 + mean_ELW_mean_diff_1 - 0.015, label = "Sylvioidea"), size = 3, color = "red2") +
+  geom_text(aes(x = 0.6, y = 0.08791209 + mean_ELW_mean_diff_1 + 0.04, label = "non-Sylvioidea"), size = 3, color = "red2") +
+  geom_text(aes(x = 0.08791209 + mean_BEAST_median_diff_1 - 0.012, y = 1.18, label = "Sylvioidea"), size = 3, color = "red2", angle = 90) +
+  geom_text(aes(x = 0.08791209 + mean_BEAST_median_diff_1 + 0.012, y = 1.15, label = "non-Sylvioidea"), size = 3, color = "red2", angle = 90) +
+  geom_text(aes(x = 0.615, y = 0.34065934 + mean_ELW_mean_diff_1 - 0.015, label = "Neognathae"), size = 3, color = "olivedrab4") +
+  geom_text(aes(x = 0.6, y = 0.34065934 + mean_ELW_mean_diff_1 + 0.04, label = "non-Neognathae"), size = 3, color = "olivedrab4") +
+  geom_text(aes(x = 0.34065934 + mean_BEAST_median_diff_1 - 0.012, y = 1.18, label = "Neognathae"), size = 3, color = "olivedrab4", angle = 90) +
+  geom_text(aes(x = 0.34065934 + mean_BEAST_median_diff_1 + 0.012, y = 1.15, label = "non-Neognathae"), size = 3, color = "olivedrab4", angle = 90) +
+  theme_classic()
+
+
+p1_ <- ggplot(data = all_1) +
+  geom_point(aes(x = BEAST_median, y = ELW_mean), size = 0.1) +
+  geom_errorbar(aes(x = BEAST_median, ymin = ELW_lower, ymax = ELW_upper, color = group), size = 0.2, width = 0) + 
+  geom_errorbarh(data = all_1, aes(y = ELW_mean, xmin = BEAST_lower, xmax = BEAST_upper, color = group), size = 0.2, height = 0) + 
+  geom_errorbar(aes(x = BEAST_median, ymin = ELW_mean_lower, ymax = ELW_mean_upper, color = group), size = 1, width = 0) +
+  labs(x = "BEAST timing estimates", y = "ELW timing estimates", color = "Genes' location") +
+  scale_color_manual(values = c("turquoise3", "violetred3")) +
+  scale_x_continuous(breaks = seq(0,1,0.1), limits = c(0,1.1)) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1.2)) +
+  geom_hline(yintercept = 0.34065934 + mean_ELW_mean_diff_1, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_hline(yintercept = 0.08791209 + mean_ELW_mean_diff_1, linetype = "dashed", color = "red2", size = 0.3) + 
+  geom_vline(xintercept = 0.34065934 + mean_BEAST_median_diff_1, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_vline(xintercept = 0.08791209 + mean_BEAST_median_diff_1, linetype = "dashed", color = "red2", size = 0.3) + 
+  geom_text(aes(x = 0.615, y = 0.08791209 + mean_ELW_mean_diff_1 - 0.015, label = "Sylvioidea"), size = 3, color = "white") +
+  geom_text(aes(x = 0.6, y = 0.08791209 + mean_ELW_mean_diff_1 + 0.04, label = "non-Sylvioidea"), size = 3, color = "white") +
+  geom_text(aes(x = 0.08791209 + mean_BEAST_median_diff_1 - 0.012, y = 1.18, label = "Sylvioidea"), size = 3, color = "white", angle = 90) +
+  geom_text(aes(x = 0.08791209 + mean_BEAST_median_diff_1 + 0.012, y = 1.15, label = "non-Sylvioidea"), size = 3, color = "white", angle = 90) +
+  geom_text(aes(x = 0.615, y = 0.34065934 + mean_ELW_mean_diff_1 - 0.015, label = "Neognathae"), size = 3, color = "white") +
+  geom_text(aes(x = 0.6, y = 0.34065934 + mean_ELW_mean_diff_1 + 0.04, label = "non-Neognathae"), size = 3, color = "white") +
+  geom_text(aes(x = 0.34065934 + mean_BEAST_median_diff_1 - 0.012, y = 1.18, label = "Neognathae"), size = 3, color = "white", angle = 90) +
+  geom_text(aes(x = 0.34065934 + mean_BEAST_median_diff_1 + 0.012, y = 1.15, label = "non-Neognathae"), size = 3, color = "white", angle = 90) +
+  theme_classic() +
+  scale_y_break(breaks = c(0.42,0.85), scales = 0.2)
+```
+
+
+```{r}
+ELW_mod <- ELW_2 %>% select(-st_Pos) %>% 
+  `colnames<-`(.,c("Transcript_ID", "ELW_mean", "ELW_lower", "ELW_upper", "group"))
+BEAST_mod <- BEAST %>% select(Transcript_ID, median, hpd_interval_low, hpd_interval_high) %>% 
+  `colnames<-`(.,c("Transcript_ID", "BEAST_median", "BEAST_lower", "BEAST_upper"))
+
+all_2 <- left_join(ELW_mod, BEAST_mod, by = "Transcript_ID") %>% select(Transcript_ID, group, everything())
+ELW_mean_jitter_2 <- jitter(all_2$ELW_mean, amount = 0)
+BEAST_median_jitter_2 <- jitter(all_2$BEAST_median, amount = 0)
+
+ELW_mean_diff_2 <- (ELW_mean_jitter_2 - all_2$ELW_mean) / 2
+BEAST_median_diff_2 <- BEAST_median_jitter_2 - all_2$BEAST_median
+
+all_2$ELW_mean <- all_2$ELW_mean + ELW_mean_diff_2
+all_2$ELW_lower <- all_2$ELW_lower + ELW_mean_diff_2
+all_2$ELW_upper <- all_2$ELW_upper + ELW_mean_diff_2
+
+all_2$BEAST_median <- all_2$BEAST_median + BEAST_median_diff_2
+all_2$BEAST_lower <- all_2$BEAST_lower + BEAST_median_diff_2
+all_2$BEAST_upper <- all_2$BEAST_upper + BEAST_median_diff_2
+
+mean_ELW_mean_diff_2 <- mean(ELW_mean_diff_2)
+mean_BEAST_median_diff_2 <- mean(BEAST_median_diff_2)
+
+p2 <- ggplot(data = all_2) +
+  geom_errorbar(aes(x = BEAST_median, ymin = ELW_lower, ymax = ELW_upper, color = group), size = 0.2, width = 0) + 
+  geom_errorbarh(data = all_2, aes(y = ELW_mean, xmin = BEAST_lower, xmax = BEAST_upper, color = group), size = 0.2, height = 0) +
+  geom_point(aes(x = BEAST_median, y = ELW_mean, fill = group), size = 2, pch = 23) +
+  labs(x = "BEAST timing estimates", y = "ELW timing estimates", fill = "Genes' location", color = "Genes' location") +
+  scale_fill_manual(values = c("turquoise3", "violetred3")) +
+  scale_color_manual(values = c("turquoise3", "violetred3")) +
+  scale_x_continuous(breaks = seq(0,1,1/12), limits = c(0, 1.1), labels = round(seq(0,1,1/12), digits = 2)) +
+  scale_y_continuous(breaks = seq(0.5,12.5,1), limits = c(0, 14)) +
+  geom_hline(yintercept = 10.5 + mean_ELW_mean_diff_2, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_hline(yintercept = 6.5 + mean_ELW_mean_diff_2, linetype = "dashed", color = "red2", size = 0.3) + 
+  geom_vline(xintercept = 0.91666667 + mean_BEAST_median_diff_2, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_vline(xintercept = 0.5 + mean_BEAST_median_diff_2, linetype = "dashed", color = "red2", size = 0.3) +
+  theme_classic()
+
+# ----- Spearman rank correlation -----
+res <- cor.test(all_2$ELW_mean, all_2$BEAST_median, method = "spearman")
+```
+
+```{r}
+ggsave("./Report_local/Figure/Fig.Correlation_btw_ELW_BEAST.eps", p2, width = 6.5, height = 5)
+```

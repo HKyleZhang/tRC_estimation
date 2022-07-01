@@ -1,0 +1,8 @@
+channels:
+- conda-forge
+- bioconda
+dependencies:
+- parallel=20210422
+- paml=4.9
+- raxml=8.2.12
+- iqtree=2.1.2

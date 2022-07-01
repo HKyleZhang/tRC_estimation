@@ -1,0 +1,759 @@
+---
+title: "Summary plots of different approaches"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r lib}
+suppressMessages(library(tidyverse))
+suppressMessages(library(tracerer))
+suppressMessages(library(readxl))
+suppressMessages(library(knitr))
+suppressMessages(library(kableExtra))
+suppressMessages(library(ggpubr))
+suppressMessages(library(cowplot))
+suppressMessages(library(ggnewscale))
+suppressMessages(library(HistogramTools))
+suppressMessages(library(transport))
+suppressMessages(library(coin))
+```
+
+```{r functions}
+# Function 1: Parse Codeml output
+parse_codeml <- function(mlc_file, species_set) {
+  mlc <- read_lines(mlc_file, skip_empty_rows = TRUE)
+  
+  i <- grep('pairwise comparison, codon frequencies:', mlc)
+  j <- grep("Data set", mlc)[-1] %>% `-` (.,1) %>% c(.,length(mlc))
+  
+  if (length(i) == 0 || length(j) == 0)
+    return(NULL)
+  
+  dnds <- list()
+  for (k in 1:length(i)) {
+    mlc_part <- mlc[i[k]:j[k]]
+    
+    ii <- 1
+    tag <- vector()
+    dn <- vector()
+    ds <- vector()
+    w <- vector()
+    for (x in 1 : (length(species_set) - 1)){
+      for (y in (x+1) : length(species_set)){
+        tag[ii] <- paste0(species_set[x], '-', species_set[y])
+        pattern <- grep(paste0('(',species_set[x],')'), mlc_part, value = TRUE, fixed = TRUE) %>% 
+          grep(paste0('(',species_set[y],')'),.,value = TRUE, fixed = TRUE)
+        info_line_index <- grep(pattern, mlc_part, fixed = TRUE) + 3
+        info <- mlc_part[info_line_index]
+        info <- strsplit(info, " ") %>% unlist() %>% `[`(nzchar(.))
+        dn[ii] <- as.numeric(info[11])
+        ds[ii] <- as.numeric(info[14])
+        w[ii] <- as.numeric(info[8])
+        ii <- ii + 1
+      }
+    }
+    dnds[[k]] <- tibble(dataset = k, pair = tag, dN = dn, dS = ds, ratio = w)
+  }
+  dnds <- reduce(dnds, bind_rows)
+  return(dnds)
+}
+
+```
+
+```{r read-in shared files}
+# Physical position
+pos <- read_csv("./Input_local/LinkageMap_translated_positions_curated_genes.csv", 
+                col_types = cols(
+                  `Transcript ID` = col_character(),
+                  `Gene name` = col_character(),
+                  Chromosome = col_character(),
+                  Start = col_double(),
+                  End = col_double(),
+                  GRW_transcript_ID = col_character()))  %>% 
+  select(`Transcript ID`, Start) %>% 
+  `colnames<-`(.,c("Transcript_ID","st_Pos"))
+
+# Alignment length
+len <- read.table("./Input_local/goalign_alignment_length.txt") %>% 
+  `colnames<-`(.,c("Transcript_ID","Length"))
+```
+
+#### Codeml
+```{r Codeml, fig.width=10, fig.height=2.5}
+# Codeml result
+gene <- read.table("./Analysis_local/Codeml_dNdS_computationalW/file_list.txt") %>% 
+  separate(col = V1, into = c("trash", "file"), sep = 'lip/') %>% select(-trash) %>% 
+  separate(col = "file", into = c("Transcript_ID", "trash"), sep = '[.]') %>% select(-trash)
+
+nicke <- parse_codeml(mlc_file = "./Analysis_local/Codeml_dNdS_NickeW/codeml_output",
+                      species_set = c("GRW_Z", "Nicke_W")) %>% 
+  mutate(Transcript_ID = gene$Transcript_ID, Species = "GRW-Nicke") %>% 
+  select(Transcript_ID, everything()) %>% 
+  select(-dataset, -pair)
+
+grw <- parse_codeml(mlc_file = "./Analysis_local/Codeml_dNdS_computationalW/codeml_output",
+                    species_set = c("GRW_Z", "GRW_W")) %>% 
+  mutate(Transcript_ID = gene$Transcript_ID, Species = "GRW") %>% 
+  select(Transcript_ID, everything()) %>% 
+  select(-dataset, -pair)
+
+# ---------
+dS <- bind_rows(nicke, grw) %>% 
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  mutate(group = "NA") %>% 
+  filter(Species == "GRW") %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+  mutate(label = paste0("T", substr(Transcript_ID, start = 14, stop = 18))) %>% 
+  arrange(st_Pos)
+
+dS$label <- factor(dS$label, levels = unique(dS$label))
+
+dS$group[dS$st_Pos < 76.8*1e6] <- "Ancestral Z"
+dS$group[dS$st_Pos >= 76.8*1e6] <- "Added Z"
+dS$group <- factor(dS$group, levels = c("Ancestral Z", "Added Z"))
+
+# ---------- Clustering ----------
+dm <- dS %>% select(dS) %>% dist(method = "euclidean")
+k2 <- kmeans(dm, centers = 2, iter.max = 100, nstart = 25)
+
+dS <- dS %>% mutate(Cluster = k2$cluster)
+k <- dS %>% filter(Transcript_ID == "ENSTGUT00000005903") %>% select(Cluster) %>% .[1] %>% as.numeric()
+if (k == 2) {
+  dS$Cluster[dS$Cluster == "2"] <- 3
+  dS$Cluster[dS$Cluster == "1"] <- 2
+  dS$Cluster[dS$Cluster == "3"] <- 1
+}
+dS$Cluster <- factor(dS$Cluster, levels = c(1,2))
+# ----------
+plot_upper_bound <- ceiling(max(dS$dS) * 10) / 10
+p_dS <- ggplot(data = dS) + 
+  geom_point(aes(x = label, y = dS, color = Cluster), size = 3.5) +
+  scale_y_continuous(limits = c(0, plot_upper_bound), breaks = seq(0, plot_upper_bound, 0.05)) +
+  facet_grid(cols = vars(group), space = "free_x", scales = "free_x") +
+  labs(x = "Transcript ID") +
+  scale_color_manual(values = c("#9C6114", "#010180")) +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+p_dS
+ggsave("Fig.dS.eps", p_dS, path = "./Report_local/Figure/", width = 10.5, height = 2.5)
+```
+
+#### ML
+```{r ML tree, fig.width=10, fig.height=3}
+# RAxML ML tree
+tb <- read_excel("./Analysis_local/ML_tree/ML_tree_summary.xlsx")
+ML_comp <- tb %>% select(Transcript_ID, GRW_lower, GRW_upper) %>% `colnames<-`(.,c("Transcript_ID", "lower", "upper")) %>% 
+  mutate(group = "NA")
+ML_Nicke <- tb %>% select(Transcript_ID, Nicke_lower, Nicke_upper) %>% `colnames<-`(.,c("Transcript_ID", "lower", "upper")) %>%
+  mutate(group = "NA")
+
+# ----------
+template <- tibble(Transcript_ID = tb$Transcript_ID, 
+                   `1` = 0,
+                   `2` = 0,
+                   `3` = 0,
+                   `4` = 0,
+                   `5` = 0,
+                   `6` = 0,
+                   `7` = 0,
+                   `8` = 0,
+                   `9` = 0,
+                   `10` = 0,
+                   `11` = 0,
+                   `12` = 0) %>% 
+  column_to_rownames(var = "Transcript_ID")
+
+fill_in <- function(tb) {
+  new <- template
+  for (r in 1:nrow(tb)) {
+    lower <- as.numeric(tb$lower[r])
+    upper <- as.numeric(tb$upper[r])
+    for (c in lower:upper) {
+      new[r,c] <- 1
+    }
+  }
+  new <- new %>% 
+    rownames_to_column(var = "Transcript_ID") %>% 
+    gather(key = "Tree_position", value = "estimate", `1`:`12`)
+  return(new)
+}
+
+# ----------
+ML_comp <- fill_in(ML_comp) %>%   
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  arrange(st_Pos) %>% 
+  mutate(group = "NA", Species = "GRW")
+ML_comp$Transcript_ID <- factor(ML_comp$Transcript_ID, levels = unique(ML_comp$Transcript_ID))
+ML_comp$group[ML_comp$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ML_comp$group[ML_comp$st_Pos >= 76.8*1e6] <- "Added Z"
+ML_comp$group <- factor(ML_comp$group, levels = c("Ancestral Z", "Added Z"))
+ML_comp$Tree_position <- factor(ML_comp$Tree_position, levels = seq(1,12))
+ML_comp$estimate <- factor(ML_comp$estimate, levels = c(0,1))
+
+ML_Nicke <- fill_in(ML_Nicke) %>%   
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  arrange(st_Pos) %>% 
+  mutate(group = "NA", Species = "GRW-Nicke")
+ML_Nicke$Transcript_ID <- factor(ML_Nicke$Transcript_ID, levels = unique(ML_Nicke$Transcript_ID))
+ML_Nicke$group[ML_Nicke$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ML_Nicke$group[ML_Nicke$st_Pos >= 76.8*1e6] <- "Added Z"
+ML_Nicke$group <- factor(ML_Nicke$group, levels = c("Ancestral Z", "Added Z"))
+ML_Nicke$Tree_position <- factor(ML_Nicke$Tree_position, levels = seq(1,12))
+ML_Nicke$estimate <- factor(ML_Nicke$estimate, levels = c(0,1))
+
+ML <- bind_rows(ML_comp, ML_Nicke) %>% 
+  filter(Species == "GRW") %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+  spread(key = "Tree_position", value = "estimate")
+
+# ---------- Cluster ----------
+dm <- ML %>% 
+  select(-st_Pos, -Length, -group, -Species) %>% 
+  column_to_rownames(var = "Transcript_ID") %>% 
+  dist(method = "euclidean")
+k2 <- kmeans(dm, centers = 2, iter.max = 100, nstart = 25)
+cluster <- tibble(Transcript_ID = names(k2$cluster), Cluster = k2$cluster)
+
+ML <- ML %>% 
+  left_join(cluster, by = "Transcript_ID") %>% 
+  gather(key = "Tree_position", value = "estimate", `1`:`12`) %>% 
+  mutate(label = paste0("T", substr(Transcript_ID, start = 14, stop = 18))) %>% 
+  arrange(st_Pos)
+ML$Tree_position <- factor(ML$Tree_position, levels = seq(1,12))
+
+# ----------
+ML$label <- factor(ML$label, levels = unique(ML$label))
+ML$estimate <- as.numeric(ML$estimate)
+
+k <- ML %>% filter(Transcript_ID == "ENSTGUT00000000024") %>% select(Cluster) %>% .[1,1]
+if (k == 2) {
+  ML$Cluster[ML$Cluster == "2"] <- 3
+  ML$Cluster[ML$Cluster == "1"] <- 2
+  ML$Cluster[ML$Cluster == "3"] <- 1
+}
+ML$Cluster <- as.numeric(ML$Cluster)
+ML <- ML %>% mutate(color = estimate * Cluster)
+ML$color <- factor(ML$color, levels = c(0,1,2))
+
+# ----------
+p_ML <- ggplot(data = ML) +
+  geom_point(aes(x = label, y = Tree_position, color = color), shape = 15, size = 5) +
+  facet_grid(cols = vars(group), space = "free_x", scales = "free_x") +
+  scale_color_manual(values = c("NA", "#9C6114", "#010180")) +
+  labs(x = "Transcript ID", y = "Tree position") +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        legend.position = "none",
+        panel.spacing.y = unit(3, "lines"))
+
+p_ML
+ggsave("Fig.ML.eps", p_ML, path = "./Report_local/Figure/", width = 10.5, height = 3)
+```
+
+#### ELW
+```{r ELW, fig.width=10.5, fig.height=3}
+# ELW result
+grw <- read.table("./Analysis_local/IQ-Tree_topology_test/IQ-Tree_topology_test_All_Z+GRW_W.txt", header = T) %>% mutate(Species = "GRW")
+grw_nicke <- read.table("./Analysis_local/IQ-Tree_topology_test/IQ-Tree_topology_test_All_Z+Nicke_W.txt", header = T) %>% mutate(Species = "GRW-Nicke")
+multi <- read.table("./Analysis_local/IQ-Tree_topology_test/IQ-Tree_topology_test_All_ZW.txt", header = T) %>% mutate(Species = "multi")
+
+# ----------
+ELW <- bind_rows(grw, grw_nicke) %>% 
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  arrange(st_Pos) %>% 
+  select(Transcript_ID, Tree, c.ELW, Species, st_Pos, Length) %>% 
+  filter(Species == "GRW") %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+  `colnames<-`(.,c("Transcript_ID", "Tree", "ELW", "Species", "st_Pos", "Length")) %>% 
+  mutate(group = "NA")
+
+ELW_multi <- bind_rows(grw, multi) %>% 
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  arrange(st_Pos) %>% 
+  select(Transcript_ID, Tree, c.ELW, Species, st_Pos, Length) %>% 
+  filter(Species == "multi") %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+  `colnames<-`(.,c("Transcript_ID", "Tree", "ELW", "Species", "st_Pos", "Length")) %>% 
+  mutate(group = "NA")
+
+# ----- 95% confidence set -----
+sig_sign <- function(tb) {
+  dd <- tb %>% arrange(ELW) %>% mutate(signs = "+")
+  for (i in 1:nrow(dd)) {
+    if (sum(dd$ELW[1:i]) <= 0.05) {
+      dd$signs[1:i] <- "-"
+    }
+  }
+  return(dd)
+}
+
+ELW <- ELW %>% nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, sig_sign)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output")
+
+ELW_multi <- ELW_multi %>% nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, sig_sign)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output")
+
+# ------------------------------
+ELW$Transcript_ID <- factor(ELW$Transcript_ID, levels = unique(ELW$Transcript_ID))
+ELW$group[ELW$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ELW$group[ELW$st_Pos >= 76.8*1e6] <- "Added Z"
+ELW$group <- factor(ELW$group, levels = c("Ancestral Z", "Added Z"))
+
+ELW_multi$Transcript_ID <- factor(ELW_multi$Transcript_ID, levels = unique(ELW_multi$Transcript_ID))
+ELW_multi$group[ELW_multi$st_Pos < 76.8*1e6] <- "Ancestral Z"
+ELW_multi$group[ELW_multi$st_Pos >= 76.8*1e6] <- "Added Z"
+ELW_multi$group <- factor(ELW_multi$group, levels = c("Ancestral Z", "Added Z"))
+
+# ---------- Cluster ----------
+dm <- ELW %>% select(-Species, -st_Pos, -Length, -group, -signs) %>% 
+  spread(key = "Tree", value = "ELW") %>% 
+  column_to_rownames(var = "Transcript_ID") %>% 
+  dist(method = "euclidean")
+k2 <- kmeans(dm, centers = 2, iter.max = 100, nstart = 25)
+cluster <- tibble(Transcript_ID = names(k2$cluster), Cluster = k2$cluster)
+
+ELW <- ELW %>% 
+  left_join(cluster, by = "Transcript_ID") %>% 
+  mutate(label = paste0("T", substr(Transcript_ID, start = 14, stop = 18))) %>% 
+  arrange(st_Pos)
+ELW$label <- factor(ELW$label, levels = unique(ELW$label))
+#ELW$Tree <- factor(ELW$Tree, levels = seq(1,12))
+ELW$Tree <- as.numeric(ELW$Tree)
+ELW$ELW[ELW$signs == '-'] <- NaN
+
+dm <- ELW_multi %>% select(-Species, -st_Pos, -Length, -group, -signs) %>% 
+  spread(key = "Tree", value = "ELW") %>% 
+  column_to_rownames(var = "Transcript_ID") %>% 
+  dist(method = "euclidean")
+k2 <- kmeans(dm, centers = 2, iter.max = 100, nstart = 25)
+cluster <- tibble(Transcript_ID = names(k2$cluster), Cluster = k2$cluster)
+
+ELW_multi <- ELW_multi %>% 
+  left_join(cluster, by = "Transcript_ID") %>% 
+  mutate(label = paste0("T", substr(Transcript_ID, start = 14, stop = 18))) %>% 
+  arrange(st_Pos)
+ELW_multi$label <- factor(ELW_multi$label, levels = unique(ELW_multi$label))
+#ELW_multi$Tree <- factor(ELW_multi$Tree, levels = seq(1,12))
+ELW_multi$Tree <- as.numeric(ELW_multi$Tree)
+ELW_multi$ELW[ELW_multi$signs == '-'] <- NaN
+
+# ----------
+k <- ELW %>% filter(Transcript_ID == "ENSTGUT00000000024") %>% select(Cluster) %>% .[1,1]
+if (k == 1) {
+  ELW_k1 <- ELW 
+  ELW_k1$ELW[ELW_k1$Cluster == "2"] <- NA
+  ELW_k2 <- ELW 
+  ELW_k2$ELW[ELW_k2$Cluster == "1"] <- NA
+} else {
+  ELW_k1 <- ELW 
+  ELW_k1$ELW[ELW_k1$Cluster == "1"] <- NA
+  ELW_k2 <- ELW 
+  ELW_k2$ELW[ELW_k2$Cluster == "2"] <- NA
+}
+
+k <- ELW_multi %>% filter(Transcript_ID == "ENSTGUT00000000024") %>% select(Cluster) %>% .[1,1]
+if (k == 1) {
+  ELW_multi_k1 <- ELW_multi 
+  ELW_multi_k1$ELW[ELW_multi_k1$Cluster == "2"] <- NA
+  ELW_multi_k2 <- ELW_multi 
+  ELW_multi_k2$ELW[ELW_multi_k2$Cluster == "1"] <- NA
+} else {
+  ELW_multi_k1 <- ELW_multi 
+  ELW_multi_k1$ELW[ELW_multi_k1$Cluster == "1"] <- NA
+  ELW_multi_k2 <- ELW_multi 
+  ELW_multi_k2$ELW[ELW_multi_k2$Cluster == "2"] <- NA
+}
+
+# ----------
+p_ELW <- ggplot(ELW) +
+  facet_grid(cols = vars(group), space = "free_x", scales = "free_x") +
+  geom_point(data = ELW_k1, aes(x = label, y = Tree, color = ELW), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "#9C6114", na.value = NA, limits = c(0,1)) +
+  new_scale_color() +
+  geom_point(data = ELW_k2, aes(x = label, y = Tree, color = ELW), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "#010180", na.value = NA, limits = c(0,1)) +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2") +
+  scale_y_continuous(breaks = seq(1,12,1)) +
+  labs(x = "Transcript ID", y = "Hypothetical topology") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+p_ELW_multi <- ggplot(ELW_multi) +
+  facet_grid(cols = vars(group), space = "free_x", scales = "free_x") +
+  geom_point(data = ELW_multi_k1, aes(x = label, y = Tree, color = ELW), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "#9C6114", na.value = NA, limits = c(0,1)) +
+  new_scale_color() +
+  geom_point(data = ELW_multi_k2, aes(x = label, y = Tree, color = ELW), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "#010180", na.value = NA, limits = c(0,1)) +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2") +
+  scale_y_continuous(breaks = seq(1,12,1)) +
+  labs(x = "Transcript ID", y = "Hypothetical topology") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+p_ELW
+p_ELW_multi
+ggsave("Fig.ELW_with_legend.eps", p_ELW, path = "./Report_local/Figure/", width = 11.5, height = 4)
+ggsave("Fig.ELW.eps", p_ELW + theme(legend.position = "none"), path = "./Report_local/Figure/", width = 10.5, height = 3)
+
+ggsave("Fig.ELW_multi.eps", p_ELW_multi + theme(legend.position = "none"), path = "./Report_local/Figure/", width = 10.5, height = 3)
+
+# ----------
+ELW_k1$st_Pos <-ELW_k1$st_Pos / 1e6
+p_ELW_pos_anc <- ggplot(ELW) +
+  facet_grid(space = "free_x", scales = "free_x") +
+  geom_point(data = ELW_k1, aes(x = st_Pos, y = Tree, color = ELW), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "#9C6114", na.value = NA, limits = c(0,1)) +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2") +
+  scale_y_continuous(breaks = seq(1,12,1)) +
+  labs(x = "Transcript ID", y = "Hypothetical topology") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+# ----------
+get_range <- function(tb) {
+  tb_1 <- tb %>% filter(signs == "+") %>% arrange(desc(ELW))
+  max_mean <- tb_1$Tree[1]
+  
+  range_lower <- min(tb_1$Tree)
+  range_upper <- max(tb_1$Tree)
+  
+  group <- tb_1$group[1]
+  
+  tb_out <- tibble(mean = max_mean, 
+               range_lower = range_lower, 
+               range_upper = range_upper, 
+               group = group)
+  return(tb_out)
+}
+
+ELW_multi <- mutate(ELW_multi, dataset = "Multi-W")
+ELW <- mutate(ELW, dataset = "Single-W")
+all <- bind_rows(ELW, ELW_multi)
+
+p_ELW_anc <- ggplot() +
+  facet_grid(cols = vars(label), scales = "free_x", switch = "x") +
+  geom_point(data = all %>% filter(group == "Ancestral Z", dataset == "Single-W"),
+             aes(x = "1", y = Tree, color = ELW, group = dataset), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "red", na.value = NA, limits = c(0,1)) +
+  new_scale_color() +
+  geom_point(data = all %>% filter(group == "Ancestral Z", dataset == "Multi-W"),
+             aes(x = "2", y = Tree, color = ELW, group = dataset), shape = 15, size = 4.8) +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2", size = 0.3) + 
+  scale_color_gradient(name = "ELW value", low = "white", high = "midnightblue", na.value = NA, limits = c(0,1)) +
+  scale_y_continuous(breaks = seq(1,12,1)) +
+  labs(x = "Genes", y = "Hypothetical topology") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text = element_text(angle = 90),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.x = unit(0.2, "lines"))
+
+p_ELW_add <- ggplot() +
+  facet_grid(cols = vars(label), scales = "free_x", switch = "x") +
+  geom_point(data = all %>% filter(group == "Added Z", dataset == "Single-W"),
+             aes(x = "1", y = Tree, color = ELW, group = dataset), shape = 15, size = 4.8) +
+  geom_hline(yintercept = 10.5, linetype = "dashed", color = "olivedrab4", size = 0.3) + 
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red2", size = 0.3) + 
+  scale_color_gradient(name = "ELW value", low = "white", high = "red", na.value = NA, limits = c(0,1)) +
+  new_scale_color() +
+  geom_point(data = all %>% filter(group == "Added Z", dataset == "Multi-W"),
+             aes(x = "2", y = Tree, color = ELW, group = dataset), shape = 15, size = 4.8) +
+  scale_color_gradient(name = "ELW value", low = "white", high = "midnightblue", na.value = NA, limits = c(0,1)) +
+  scale_y_continuous(breaks = seq(1,12,1)) +
+  labs(x = "Genes", y = "Hypothetical topology") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text = element_text(angle = 90),
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.x = unit(0.2, "lines"))
+
+ggsave("Fig.ELW_anc_single_vs_multi.eps", p_ELW_anc + theme(legend.position = "none"), path = "./Report_local/Figure/", width = 10, height = 2.5)
+ggsave("Fig.ELW_add_single_vs_multi.eps", p_ELW_add + theme(legend.position = "none"), path = "./Report_local/Figure/", width = 13, height = 2.5)
+ggsave("Fig.ELW_anc_single_vs_multi.legends.eps", p_ELW_anc, path = "./Report_local/Figure/", width = 10, height = 4)
+
+
+ELW_multi2 <- ELW_multi %>% 
+  nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, get_range)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output") %>% 
+  mutate(width = range_upper - range_lower, dataset = "Multi-W")
+
+ELW2 <- ELW %>% 
+  nest(data = !Transcript_ID) %>% 
+  mutate(output = map(data, get_range)) %>% 
+  select(-data) %>% 
+  unnest(cols = "output") %>% 
+  mutate(width = range_upper - range_lower, dataset = "Single-W")
+
+all2 <- bind_rows(ELW2, ELW_multi2)
+all2$dataset <- factor(all2$dataset, levels = c("Single-W", "Multi-W"))
+
+# Wilcox Signed rank
+multi_width <- all2$width[all2$dataset == "Multi-W"]
+single_width <- all2$width[all2$dataset == "Single-W"]
+pair_res <- wilcoxsign_test(multi_width ~ single_width, distribution = "exact")
+
+# Plot
+p <- ggplot(data = all2, aes(x = dataset, y = width)) + 
+  geom_violin(width = 0.8, fill = "grey90") +
+  geom_point(aes(fill = group), pch = 21, size = 1.5) +
+  geom_line(aes(group = Transcript_ID, color = group), size = 0.125) +
+  scale_y_continuous(limits = c(0, 8.5), breaks = seq(0, 8, 2)) +
+  scale_fill_manual(values = c("violetred3", "turquoise3")) + 
+  scale_color_manual(values = c("violetred3", "turquoise3")) + 
+  labs(y = "Size of 95% HPD interval", color = "Genes' location", fill = "Genes' location") +
+  theme_bw()
+```
+
+#### BEAST
+```{r BEAST, fig.width=10, fig.height=3.2}
+# BEAST result
+BEAST <- read_csv("./Analysis_local/Species_combinations_BEAST/BEAST_log_summary/BEAST_log_summary_11sp.csv", 
+                  col_types = cols(
+  model = col_character(),
+  dataset = col_character(),
+  clock_model = col_character(),
+  Transcript_ID = col_character(),
+  mean = col_double(),
+  stderr_mean = col_double(),
+  stdev = col_double(),
+  variance = col_double(),
+  median = col_double(),
+  hpd_interval_low = col_double(),
+  hpd_interval_high = col_double(),
+  act = col_double(),
+  ess = col_double()
+)) %>%
+  left_join(pos, by = "Transcript_ID") %>% 
+  left_join(len, by = "Transcript_ID") %>% 
+  filter(Length >= 500) %>% 
+  filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>%
+  mutate(group = "NA") %>% 
+  arrange(st_Pos)
+
+# ---------- Cluster ----------
+get_trace <- function(tb) {
+  dd <- parse_beast_log(tb$path) %>% remove_burn_ins(burn_in_fraction = 0.1)
+  p <- dd$mrca.age.Est.
+  return(p)
+}
+
+folder <- "./Analysis_local/Species_combinations_BEAST/c11/beast_log/"
+file_list <- list.files(folder, pattern = "*.log")
+tb <- tibble(file = file_list, path = paste0(folder, file_list)) %>% 
+  nest(data = "path") %>% 
+  mutate(hist = map(data, get_trace))
+
+tb <- tb %>% separate(col = "file", into = c("Transcript_ID", "trash"), sep = '[.]') %>% 
+  select(-trash, -data)
+
+BEAST_dist <- tibble(Gene_1 = "NA", Gene_2 = "NA", dist = NaN)
+z <- 1
+for (i in 1:nrow(tb)) {
+  for (j in i:nrow(tb)) {
+    BEAST_dist[z, 1] <- tb[i, 1]
+    BEAST_dist[z, 2] <- tb[j, 1]
+    a <- tb$hist[[i]]
+    b <- tb$hist[[j]]
+    BEAST_dist[z, 3] <- wasserstein1d(a, b, p = 2)
+    #BEAST_dist[z, 3] <- intersect.dist(tb$hist[[i]], tb$hist[[j]])
+    z <- z + 1
+  }
+}
+BEAST_dist <- as.data.frame(BEAST_dist)
+
+dm <- as.dist(xtabs(BEAST_dist[, 3] ~ BEAST_dist[, 2] + BEAST_dist[, 1]))
+k2 <- kmeans(dm, centers = 2, iter.max = 100, nstart = 25)
+cluster <- tibble(Transcript_ID = names(k2$cluster), Cluster = k2$cluster)
+
+# ----------
+BEAST <- left_join(BEAST, cluster, by = "Transcript_ID") %>% 
+  mutate(label = paste0("T", substr(Transcript_ID, start = 14, stop = 18))) %>% 
+  arrange(st_Pos)
+
+BEAST$label <- factor(BEAST$label, levels = unique(BEAST$label))
+BEAST$group[BEAST$st_Pos < 76.8*1e6] <- "Ancestral Z"
+BEAST$group[BEAST$st_Pos >= 76.8*1e6] <- "Added Z"
+BEAST$group <- factor(BEAST$group, levels = c("Ancestral Z", "Added Z"))
+
+k <- BEAST %>% filter(Transcript_ID == "ENSTGUT00000000024") %>% select(Cluster) %>% .[1,1] %>% as.numeric()
+if (k == 2) {
+  BEAST$Cluster[BEAST$Cluster == "2"] <- 3
+  BEAST$Cluster[BEAST$Cluster == "1"] <- 2
+  BEAST$Cluster[BEAST$Cluster == "3"] <- 1
+}
+BEAST$Cluster <- factor(BEAST$Cluster, levels = c(1, 2))
+
+# ----------------
+p_BEAST <- ggplot(data = BEAST, aes(x = label, y = median)) +
+  geom_hline(yintercept = 0.91666667, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red2") + 
+  geom_errorbar(aes(ymin = hpd_interval_low, ymax = hpd_interval_high), width = 0.1) +
+  geom_point(aes(color = Cluster), size = 3.5) +
+  scale_color_manual(values = c("#9C6114", "#010180")) +
+  labs(x = "Transcript ID", y = "Median ± 95% HPD") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  facet_grid(cols = vars(group), scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+p_BEAST
+ggsave("Fig.BEAST.eps", p_BEAST, path = "./Report_local/Figure/", width = 10.5, height = 3.2)
+
+p_BEAST_ <- ggplot(data = BEAST, aes(x = label, y = median)) +
+  geom_hline(yintercept = 0.91666667, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.83333333, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.75000000, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.66666667, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.58333333, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.50000000, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.41666667, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.33333333, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.25000000, linetype = "dashed", color = "grey50") + 
+  geom_hline(yintercept = 0.16666667, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0.08333333, linetype = "dashed", color = "grey50") +
+  geom_errorbar(aes(ymin = hpd_interval_low, ymax = hpd_interval_high), width = 0.1) +
+  geom_point(aes(color = Cluster), size = 2.5) +
+  scale_color_manual(values = c("#9C6114", "#010180")) +
+  labs(x = "Transcript ID", y = "Median ± 95% HPD") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  facet_grid(cols = vars(group), scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        legend.position = "bottom",
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+ggsave("Fig.BEAST.species_lines.eps", p_BEAST_, path = "./Report_local/Figure/", width = 10.5, height = 5)
+
+# ----------------
+BEAST$st_Pos <- BEAST$st_Pos / 1e6
+p_BEAST_pos_anc <- ggplot(data = BEAST %>% filter(group == "Ancestral Z"), aes(x = st_Pos, y = median)) +
+  geom_hline(yintercept = 0.91666667, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red2") + 
+  geom_errorbar(aes(ymin = hpd_interval_low, ymax = hpd_interval_high), width = 0.1) +
+  geom_point(aes(color = Cluster), size = 2) +
+  scale_color_manual(values = c("#9C6114", "#010180")) +
+  labs(x = "Transcript ID", y = "Median ± 95% HPD") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+p_BEAST_pos_add <- ggplot(data = BEAST %>% filter(group == "Added Z"), aes(x = st_Pos, y = median)) +
+  geom_hline(yintercept = 0.91666667, linetype = "dashed", color = "olivedrab4") + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red2") + 
+  geom_errorbar(aes(ymin = hpd_interval_low, ymax = hpd_interval_high), width = 0.01) +
+  geom_point(aes(color = Cluster), size = 2) +
+  scale_color_manual(values = "#010180") +
+  labs(x = "Transcript ID", y = "Median ± 95% HPD") +
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 14),
+        strip.text.y = element_blank(),
+        legend.position = "none",
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+        panel.grid.major = element_line(color = "grey60", size = 0.1),
+        panel.spacing.y = unit(3, "lines"))
+
+p_BEAST_pos <- ggarrange(p_BEAST_pos_anc, p_BEAST_pos_add, nrow = 2)
+ggsave("Fig.BEAST_chr_pos.eps", p_BEAST_pos, path = "~/Desktop/meel_pre/", width = 10.5, height = 7)
+
+```

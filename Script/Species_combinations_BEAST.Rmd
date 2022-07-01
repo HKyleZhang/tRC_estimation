@@ -1,0 +1,246 @@
+---
+title: "BEAST approach: Species combinations"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r lib}
+suppressMessages(library(tidyverse))
+suppressMessages(library(GGally))
+suppressMessages(library(rlang))
+```
+
+```{r read-in shared files}
+# Physical position
+pos <- read_csv("./Input_local/LinkageMap_translated_positions_curated_genes.csv", 
+                col_types = cols(
+                  `Transcript ID` = col_character(),
+                  `Gene name` = col_character(),
+                  Chromosome = col_character(),
+                  Start = col_double(),
+                  End = col_double(),
+                  GRW_transcript_ID = col_character()))  %>% 
+  select(`Transcript ID`, Start) %>% 
+  `colnames<-`(.,c("Transcript_ID","st_Pos"))
+
+# Alignment length
+len <- read.table("./Input_local/goalign_alignment_length.txt") %>% 
+  `colnames<-`(.,c("Transcript_ID","Length"))
+```
+
+```{r BEAST}
+# BEAST result
+BEAST_read <- function(path, tag) {
+  tb <- read_csv(path, col_types = cols(
+    model = col_character(),
+    dataset = col_character(),
+    clock_model = col_character(),
+    Transcript_ID = col_character(),
+    mean = col_double(),
+    stderr_mean = col_double(),
+    stdev = col_double(),
+    variance = col_double(),
+    median = col_double(),
+    hpd_interval_low = col_double(),
+    hpd_interval_high = col_double(),
+    act = col_double(),
+    ess = col_double()
+  )) %>%
+    left_join(pos, by = "Transcript_ID") %>% 
+    left_join(len, by = "Transcript_ID") %>% 
+    filter(Length >= 500) %>% 
+    filter(!Transcript_ID %in% c("ENSTGUT00000002542", "ENSTGUT00000005396", "ENSTGUT00000007446")) %>% 
+    arrange(st_Pos) %>% 
+    select(dataset, Transcript_ID, median, hpd_interval_low, hpd_interval_high, st_Pos) %>%
+    mutate(group = "NA",tag = rep(tag, times = nrow(.)))
+  return(tb)
+}
+
+# ----------
+folder_path <- "./Analysis_local/Species_combinations_BEAST/BEAST_log_summary/"
+file_list <- list.files(path = folder_path, pattern = "*.csv")
+BEAST <- list()
+for (i in 1:length(file_list)) {
+  tag <- str_split(file_list[i], pattern = '_') %>% .[[1]] %>% .[4] %>% 
+    str_split(pattern = '[.]') %>% .[[1]] %>% .[1]
+  file_path <- paste0(folder_path, file_list[i])
+  BEAST[[i]] <- BEAST_read(path = file_path, tag = tag)
+}
+BEAST <- reduce(BEAST, bind_rows) %>% 
+  arrange(st_Pos)
+  
+BEAST$Transcript_ID <- factor(BEAST$Transcript_ID, levels = unique(BEAST$Transcript_ID))
+BEAST$group[BEAST$st_Pos < 76.8*1e6] <- "Ancestral Z"
+BEAST$group[BEAST$st_Pos >= 76.8*1e6] <- "Added Z"
+BEAST$group <- factor(BEAST$group, levels = c("Ancestral Z", "Added Z"))
+BEAST$tag <- factor(BEAST$tag, levels = c("0sp", "2sp", "5sp", "11sp"))
+```
+
+```{r BEAST plot, fig.width=10, fig.height=10}
+# ----------
+BEAST_plot <- function(tb) {
+  p <- ggplot(data = tb, aes(x = tag, y = median)) +
+    geom_line(aes(group = 1), color = "grey80") +
+    geom_errorbar(aes(ymin = hpd_interval_low, ymax = hpd_interval_high), width = 0.1) +
+    geom_point(size = 2, color = "palevioletred4") +
+    labs(y = "Median ± 95% HPD") +
+    scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+    facet_wrap(~Transcript_ID, ncol = 4, scales = "free_y") +
+    theme(axis.text.x = element_text(size = 10, angle = 90, vjust = .5),
+          axis.text.y = element_text(size = 10),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 12),
+          strip.text.x = element_text(size = 5),
+          strip.text.y = element_blank(),
+          panel.background = element_blank(),
+          panel.border = element_rect(color = "grey10", size = 0.2, fill = NA),
+          panel.grid.major = element_line(color = "grey60", size = 0.1),
+          panel.spacing.y = unit(0.2, "lines"))
+  return(p)
+}
+
+p_anc <- BEAST_plot(tb = BEAST %>% filter(group == "Ancestral Z"))
+p_add <- BEAST_plot(tb = BEAST %>% filter(group == "Added Z"))
+
+p_anc
+p_add
+```
+
+```{r BEAST median plot, fig.width=8, fig.height=8}
+my_errorbar <- function(data, mapping) {
+  x <- mapping$x %>% quo_get_expr()
+  y <- mapping$y %>% quo_get_expr()
+  
+  x_low <- paste(x, "low", sep = '_')
+  x_high <- paste(x, "high", sep = '_')
+  
+  y_low <- paste(y, "low", sep = '_')
+  y_high <- paste(y, "high", sep = '_')
+  
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_errorbar(aes(ymin = get(y_low, data), ymax = get(y_high, data), color = group), width = 0, size = 0.4) + 
+    geom_errorbarh(aes(xmin = get(x_low, data), xmax = get(x_high, data), color = group), height = 0, size = 0.4) +
+    geom_point(pch = 21, size = 1.5) +
+    scale_x_continuous(limits = c(0, 1.1), breaks = seq(0,1,0.2)) + 
+    scale_y_continuous(limits = c(0, 1.1), breaks = seq(0,1,0.2))
+}
+
+# ----------------------------------
+median <- BEAST %>% 
+  select(Transcript_ID, median, tag) %>% 
+  spread(key = "tag", value = "median") %>% 
+  `colnames<-`(.,c("Transcript_ID", "1 outgroups", "3 outgroups", "6 outgroups", "12 outgroups")) %>% 
+  left_join(pos, by = "Transcript_ID") %>% 
+  arrange(st_Pos) %>% 
+  mutate(group = "NA")
+median$group[median$st_Pos < 76.8*1e6] <- "Ancestral Z"
+median$group[median$st_Pos >= 76.8*1e6] <- "Added Z"
+
+hpd_low <- BEAST %>% 
+  select(Transcript_ID, hpd_interval_low, tag) %>% 
+  spread(key = "tag", value = "hpd_interval_low") %>% 
+  `colnames<-`(.,c("Transcript_ID", "1 outgroups_low", "3 outgroups_low", "6 outgroups_low", "12 outgroups_low"))
+
+hpd_high <- BEAST %>% 
+  select(Transcript_ID, hpd_interval_high, tag) %>% 
+  spread(key = "tag", value = "hpd_interval_high") %>% 
+  `colnames<-`(.,c("Transcript_ID", "1 outgroups_high", "3 outgroups_high", "6 outgroups_high", "12 outgroups_high"))
+
+BEAST_mod <- left_join(median, hpd_low, by = "Transcript_ID") %>% 
+  left_join(hpd_high, by = "Transcript_ID")
+
+# ----------------------------------
+p <- ggpairs(data = BEAST_mod, 
+             mapping = aes(fill = group),
+             columns = c("1 outgroups", "3 outgroups", "6 outgroups", "12 outgroups"),
+             upper = list(continuous = wrap(my_errorbar)),
+             lower = NULL,
+             diag = NULL) +
+  scale_fill_manual(values = c("violetred3", "turquoise3")) + 
+  scale_color_manual(values = c("violetred3", "turquoise3")) +
+  theme(panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),
+        panel.border = element_rect(color = "grey50", fill = NA),
+        panel.grid.major = element_line(color = "grey50", size = 0.1))
+p
+
+
+#############################
+printVar = function(x, y){
+      vals <- cor.test(x, y, method = "spearman")[c("estimate","p.value")]
+      names(vals) <- c("rho =", "p =")
+      paste(names(vals), signif(unlist(vals), 3),collapse="\n")
+}
+my_fn <- function(data, mapping, ...) {
+  # takes in x and y for each panel
+  xData <- eval_data_col(data, mapping$x)
+  yData <- eval_data_col(data, mapping$y)
+
+  #main correlation
+  mainCor <- printVar(xData, yData)
+
+  p <- ggplot(data = data, mapping = mapping) +
+    annotate(x = 0.5,y = 0.5, label = mainCor, geom = "text", size = 3) +
+    theme_void() + 
+    ylim(c(0,1))
+  p
+}
+#############################
+
+p_ <- ggpairs(data = BEAST_mod, 
+             mapping = aes(fill = group),
+             columns = c("1 outgroups", "3 outgroups", "6 outgroups", "12 outgroups"),
+             diag = NULL,
+             upper = list(continuous = my_fn)) +
+  scale_fill_manual(values = c("violetred3", "turquoise3")) + 
+  theme_bw()
+
+p_
+ggsave("Fig.Species_combinations.eps", p, path = "./Report_local/Figure/", width = 8, height = 8)
+```
+
+```{r BEAST hpd plot, fig.width=4.5, fig.height=4.5}
+hpd <- BEAST %>% 
+  mutate(hpd_interval= hpd_interval_high - hpd_interval_low) %>% 
+  select(Transcript_ID, hpd_interval, tag) %>% 
+  spread(key = "tag", value = "hpd_interval") %>% 
+  `colnames<-`(.,c("Transcript_ID", "1", "3", "6", "12")) %>% 
+  gather(key = "Nr. outgroups", value = "HPD interval", `1`:`12`) %>% 
+  left_join(pos, by = "Transcript_ID") %>% 
+  arrange(st_Pos) %>% 
+  mutate(group = "NA")
+hpd$group[hpd$st_Pos < 76.8*1e6] <- "Ancestral Z"
+hpd$group[hpd$st_Pos >= 76.8*1e6] <- "Added Z"
+hpd$`Nr. outgroups` <- factor(hpd$`Nr. outgroups`, levels = c("1", "3", "6", "12"))
+
+# ----------------------------------
+# Kruskal-Wallis
+res <- kruskal.test(`HPD interval` ~ `Nr. outgroups`, data = hpd)
+
+# Wilcox Signed rank
+pair_res <- pairwise.wilcox.test(x = hpd$`HPD interval`, 
+                                 g = hpd$`Nr. outgroups`, 
+                                 p.adjust.method = "bonferroni", 
+                                 paired = T)
+
+
+# ----------------------------------
+p_hpd <- ggplot(data = hpd, aes(x = `Nr. outgroups`, y = `HPD interval`)) + 
+  geom_boxplot(width = 0.65, fill = "grey90") +
+  geom_point(aes(fill = group), pch = 21, size = 1, position = position_dodge(width = 0.2)) +
+  geom_line(aes(group = Transcript_ID, color = group), size = 0.1) +
+  scale_y_continuous(limits = c(0, 1.2), breaks = seq(0, 1, 0.25)) +
+  scale_fill_manual(values = c("violetred3", "turquoise3")) + 
+  scale_color_manual(values = c("violetred3", "turquoise3")) + 
+  #geom_text(aes(x = 1, y = 1.1, label = "a"), size = 6) +
+  #geom_text(aes(x = 2, y = 1.1, label = "b"), size = 6) +
+  #geom_text(aes(x = 3, y = 1.1, label = "c"), size = 6) +
+  #geom_text(aes(x = 4, y = 1.1, label = "d"), size = 6) +
+  labs(y = "Size of 95% HPD interval", color = "Genes' location", fill = "Genes' location") +
+  theme_bw()
+
+p_hpd
+
+ggsave("Fig.Species_combinations_boxplot.eps", p_hpd, path = "./Report_local/Figure/", width = 3.8, height = 3.8)
+```

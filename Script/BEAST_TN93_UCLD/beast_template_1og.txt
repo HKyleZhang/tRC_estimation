@@ -1,0 +1,189 @@
+    
+<map name="Uniform" >beast.math.distributions.Uniform</map>
+<map name="Exponential" >beast.math.distributions.Exponential</map>
+<map name="LogNormal" >beast.math.distributions.LogNormalDistributionModel</map>
+<map name="Normal" >beast.math.distributions.Normal</map>
+<map name="Beta" >beast.math.distributions.Beta</map>
+<map name="Gamma" >beast.math.distributions.Gamma</map>
+<map name="LaplaceDistribution" >beast.math.distributions.LaplaceDistribution</map>
+<map name="prior" >beast.math.distributions.Prior</map>
+<map name="InverseGamma" >beast.math.distributions.InverseGamma</map>
+<map name="OneOnX" >beast.math.distributions.OneOnX</map>
+
+
+<run id="mcmc" spec="MCMC" chainLength="1000000000" preBurnin="10000" storeEvery="10000">
+    <state id="state" spec="State" storeEvery="10000">
+        <tree id="Tree.t:EXAMPLE" spec="beast.evolution.tree.Tree" name="stateNode">
+            <taxonset id="TaxonSet.EXAMPLE" spec="TaxonSet">
+                <alignment idref="EXAMPLE"/>
+            </taxonset>
+        </tree>
+        <parameter id="birthRate.t:EXAMPLE" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
+        <parameter id="proportionInvariant.s:EXAMPLE" spec="parameter.RealParameter" lower="0.0" name="stateNode" upper="1.0">0.5</parameter>
+        <parameter id="gammaShape.s:EXAMPLE" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
+        <parameter id="kappa1.s:EXAMPLE" spec="parameter.RealParameter" lower="0.0" name="stateNode">2.0</parameter>
+        <parameter id="kappa2.s:EXAMPLE" spec="parameter.RealParameter" lower="0.0" name="stateNode">2.0</parameter>
+        <parameter id="ucldStdev.c:EXAMPLE" spec="parameter.RealParameter" lower="0.0" name="stateNode">0.1</parameter>
+        <stateNode id="rateCategories.c:EXAMPLE" spec="parameter.IntegerParameter" dimension="26">1</stateNode>
+        <parameter id="ucldMean.c:EXAMPLE" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
+        <parameter id="freqParameter.s:EXAMPLE" spec="parameter.RealParameter" dimension="4" lower="0.0" name="stateNode" upper="1.0">0.25</parameter>
+    </state>
+
+    <init id="RandomTree.t:EXAMPLE" spec="beast.evolution.tree.RandomTree" estimate="false" initial="@Tree.t:EXAMPLE" taxa="@EXAMPLE">
+        <populationModel id="ConstantPopulation0.t:EXAMPLE" spec="ConstantPopulation">
+            <parameter id="randomPopSize.t:EXAMPLE" spec="parameter.RealParameter" name="popSize">1.0</parameter>
+        </populationModel>
+    </init>
+
+    <distribution id="posterior" spec="util.CompoundDistribution">
+        <distribution id="prior" spec="util.CompoundDistribution">
+            <distribution id="YuleModel.t:EXAMPLE" spec="beast.evolution.speciation.YuleModel" birthDiffRate="@birthRate.t:EXAMPLE" tree="@Tree.t:EXAMPLE"/>
+            <prior id="YuleBirthRatePrior.t:EXAMPLE" name="distribution" x="@birthRate.t:EXAMPLE">
+                <Uniform id="Uniform.1" name="distr" upper="Infinity"/>
+            </prior>
+            <prior id="FrequenciesPrior.s:EXAMPLE" name="distribution" x="@freqParameter.s:EXAMPLE">
+                <Uniform id="Uniform.3" name="distr"/>
+            </prior>
+            <prior id="GammaShapePrior.s:EXAMPLE" name="distribution" x="@gammaShape.s:EXAMPLE">
+                <Exponential id="Exponential.0" name="distr">
+                    <parameter id="RealParameter.0" spec="parameter.RealParameter" estimate="false" name="mean">1.0</parameter>
+                </Exponential>
+            </prior>
+            <prior id="kappa1Prior.s:EXAMPLE" name="distribution" x="@kappa1.s:EXAMPLE">
+                <LogNormal id="LogNormalDistributionModel.0" name="distr">
+                    <parameter id="RealParameter.1" spec="parameter.RealParameter" estimate="false" name="M">1.0</parameter>
+                    <parameter id="RealParameter.2" spec="parameter.RealParameter" estimate="false" name="S">1.25</parameter>
+                </LogNormal>
+            </prior>
+            <prior id="kappa2Prior.s:EXAMPLE" name="distribution" x="@kappa2.s:EXAMPLE">
+                <LogNormal id="LogNormalDistributionModel.1" name="distr">
+                    <parameter id="RealParameter.3" spec="parameter.RealParameter" estimate="false" name="M">1.0</parameter>
+                    <parameter id="RealParameter.4" spec="parameter.RealParameter" estimate="false" name="S">1.25</parameter>
+                </LogNormal>
+            </prior>
+            <prior id="PropInvariantPrior.s:EXAMPLE" name="distribution" x="@proportionInvariant.s:EXAMPLE">
+                <Uniform id="Uniform.2" name="distr"/>
+            </prior>
+            <prior id="MeanRatePrior.c:EXAMPLE" name="distribution" x="@ucldMean.c:EXAMPLE">
+                <Uniform id="Uniform.5" name="distr" upper="Infinity"/>
+            </prior>
+            <prior id="ucldStdevPrior.c:EXAMPLE" name="distribution" x="@ucldStdev.c:EXAMPLE">
+                <Gamma id="Gamma.0" name="distr">
+                    <parameter id="RealParameter.6" spec="parameter.RealParameter" estimate="false" name="alpha">0.5396</parameter>
+                    <parameter id="RealParameter.7" spec="parameter.RealParameter" estimate="false" name="beta">0.3819</parameter>
+                </Gamma>
+            </prior>
+            <distribution id="Ano+.prior" spec="beast.math.distributions.MRCAPrior" tree="@Tree.t:EXAMPLE">
+                <taxonset id="Ano+" spec="TaxonSet">
+                    <taxon id="Ano" spec="Taxon"/>
+                    <taxon id="TAXON_W" spec="Taxon"/>
+                    <taxon id="GRW_Z" spec="Taxon"/>
+                </taxonset>
+                <Normal id="Normal.1" name="distr">
+                    <parameter id="RealParameter.46" spec="parameter.RealParameter" estimate="false" name="mean">1.0</parameter>
+                    <parameter id="RealParameter.47" spec="parameter.RealParameter" estimate="false" name="sigma">0.001</parameter>
+                </Normal>
+            </distribution>
+            <distribution id="Est.prior" spec="beast.math.distributions.MRCAPrior" tree="@Tree.t:EXAMPLE">
+                <taxonset id="Est" spec="TaxonSet">
+                    <taxon idref="GRW_Z"/>
+                    <taxon idref="TAXON_W"/>
+                </taxonset>
+                <Uniform id="Uniform.11" lower="0.001" name="distr" upper="0.999"/>
+            </distribution>
+        </distribution>
+        <distribution id="likelihood" spec="util.CompoundDistribution" useThreads="true">
+            <distribution id="treeLikelihood.EXAMPLE" spec="ThreadedTreeLikelihood" data="@EXAMPLE" tree="@Tree.t:EXAMPLE">
+                <siteModel id="SiteModel.s:EXAMPLE" spec="SiteModel" gammaCategoryCount="5" proportionInvariant="@proportionInvariant.s:EXAMPLE" shape="@gammaShape.s:EXAMPLE">
+                    <parameter id="mutationRate.s:EXAMPLE" spec="parameter.RealParameter" estimate="false" name="mutationRate">1.0</parameter>
+                    <substModel id="tn93.s:EXAMPLE" spec="TN93" kappa1="@kappa1.s:EXAMPLE" kappa2="@kappa2.s:EXAMPLE">
+                        <frequencies id="estimatedFreqs.s:EXAMPLE" spec="Frequencies" frequencies="@freqParameter.s:EXAMPLE"/>
+                    </substModel>
+                </siteModel>
+                <branchRateModel id="RelaxedClock.c:EXAMPLE" spec="beast.evolution.branchratemodel.UCRelaxedClockModel" clock.rate="@ucldMean.c:EXAMPLE" rateCategories="@rateCategories.c:EXAMPLE" tree="@Tree.t:EXAMPLE">
+                    <LogNormal id="LogNormalDistributionModel.c:EXAMPLE" S="@ucldStdev.c:EXAMPLE" meanInRealSpace="true" name="distr">
+                        <parameter id="RealParameter.5" spec="parameter.RealParameter" estimate="false" lower="0.0" name="M" upper="1.0">1.0</parameter>
+                    </LogNormal>
+                </branchRateModel>
+            </distribution>
+        </distribution>
+    </distribution>
+
+    <operator id="YuleBirthRateScaler.t:EXAMPLE" spec="ScaleOperator" parameter="@birthRate.t:EXAMPLE" weight="3.0"/>
+
+    <operator id="YuleModelTreeScaler.t:EXAMPLE" spec="ScaleOperator" scaleFactor="0.5" tree="@Tree.t:EXAMPLE" weight="3.0"/>
+
+    <operator id="YuleModelTreeRootScaler.t:EXAMPLE" spec="ScaleOperator" rootOnly="true" scaleFactor="0.5" tree="@Tree.t:EXAMPLE" weight="3.0"/>
+
+    <operator id="YuleModelUniformOperator.t:EXAMPLE" spec="Uniform" tree="@Tree.t:EXAMPLE" weight="30.0"/>
+
+    <operator id="YuleModelSubtreeSlide.t:EXAMPLE" spec="SubtreeSlide" tree="@Tree.t:EXAMPLE" weight="15.0"/>
+
+    <operator id="YuleModelNarrow.t:EXAMPLE" spec="Exchange" tree="@Tree.t:EXAMPLE" weight="15.0"/>
+
+    <operator id="YuleModelWide.t:EXAMPLE" spec="Exchange" isNarrow="false" tree="@Tree.t:EXAMPLE" weight="3.0"/>
+
+    <operator id="YuleModelWilsonBalding.t:EXAMPLE" spec="WilsonBalding" tree="@Tree.t:EXAMPLE" weight="3.0"/>
+
+    <operator id="proportionInvariantScaler.s:EXAMPLE" spec="ScaleOperator" parameter="@proportionInvariant.s:EXAMPLE" scaleFactor="0.5" weight="0.1"/>
+
+    <operator id="gammaShapeScaler.s:EXAMPLE" spec="ScaleOperator" parameter="@gammaShape.s:EXAMPLE" scaleFactor="0.5" weight="0.1"/>
+
+    <operator id="kappa1Scaler.s:EXAMPLE" spec="ScaleOperator" parameter="@kappa1.s:EXAMPLE" scaleFactor="0.5" weight="0.1"/>
+
+    <operator id="kappa2Scaler.s:EXAMPLE" spec="ScaleOperator" parameter="@kappa2.s:EXAMPLE" scaleFactor="0.5" weight="0.1"/>
+
+    <operator id="ucldStdevScaler.c:EXAMPLE" spec="ScaleOperator" parameter="@ucldStdev.c:EXAMPLE" scaleFactor="0.5" weight="3.0"/>
+
+    <operator id="CategoriesRandomWalk.c:EXAMPLE" spec="IntRandomWalkOperator" parameter="@rateCategories.c:EXAMPLE" weight="10.0" windowSize="1"/>
+
+    <operator id="CategoriesSwapOperator.c:EXAMPLE" spec="SwapOperator" intparameter="@rateCategories.c:EXAMPLE" weight="10.0"/>
+
+    <operator id="CategoriesUniform.c:EXAMPLE" spec="UniformOperator" parameter="@rateCategories.c:EXAMPLE" weight="10.0"/>
+
+    <operator id="ucldMeanScaler.c:EXAMPLE" spec="ScaleOperator" parameter="@ucldMean.c:EXAMPLE" scaleFactor="0.5" weight="1.0"/>
+
+    <operator id="relaxedUpDownOperator.c:EXAMPLE" spec="UpDownOperator" scaleFactor="0.75" weight="3.0">
+        <up idref="ucldMean.c:EXAMPLE"/>
+        <down idref="Tree.t:EXAMPLE"/>
+    </operator>
+
+    <operator id="FrequenciesExchanger.s:EXAMPLE" spec="DeltaExchangeOperator" delta="0.01" weight="0.1">
+        <parameter idref="freqParameter.s:EXAMPLE"/>
+    </operator>
+
+    <logger id="tracelog" spec="Logger" fileName="EXAMPLE.log" logEvery="100000" model="@posterior" sanitiseHeaders="true" sort="smart">
+        <log idref="posterior"/>
+        <log idref="likelihood"/>
+        <log idref="prior"/>
+        <log idref="treeLikelihood.EXAMPLE"/>
+        <log id="TreeHeight.t:EXAMPLE" spec="beast.evolution.tree.TreeHeightLogger" tree="@Tree.t:EXAMPLE"/>
+        <log idref="YuleModel.t:EXAMPLE"/>
+        <log idref="birthRate.t:EXAMPLE"/>
+        <log idref="proportionInvariant.s:EXAMPLE"/>
+        <log idref="gammaShape.s:EXAMPLE"/>
+        <log idref="kappa1.s:EXAMPLE"/>
+        <log idref="kappa2.s:EXAMPLE"/>
+        <log idref="ucldStdev.c:EXAMPLE"/>
+        <log id="rate.c:EXAMPLE" spec="beast.evolution.branchratemodel.RateStatistic" branchratemodel="@RelaxedClock.c:EXAMPLE" tree="@Tree.t:EXAMPLE"/>
+        <log idref="Ano+.prior"/>
+        <log idref="ucldMean.c:EXAMPLE"/>
+        <log idref="Est.prior"/>
+        <log idref="freqParameter.s:EXAMPLE"/>
+    </logger>
+
+    <logger id="screenlog" spec="Logger" logEvery="1000">
+        <log idref="posterior"/>
+        <log idref="likelihood"/>
+        <log idref="prior"/>
+    </logger>
+
+    <logger id="treelog.t:EXAMPLE" spec="Logger" fileName="$(tree).trees" logEvery="100000" mode="tree">
+        <log id="TreeWithMetaDataLogger.t:EXAMPLE" spec="beast.evolution.tree.TreeWithMetaDataLogger" branchratemodel="@RelaxedClock.c:EXAMPLE" tree="@Tree.t:EXAMPLE"/>
+    </logger>
+
+    <operatorschedule id="OperatorSchedule" spec="OperatorSchedule"/>
+
+</run>
+
+</beast>
